@@ -13,6 +13,14 @@ OUT="$ROOT/build"
 
 mkdir -p "$OUT"
 
+# Assemblar index.html des dels fitxers de subsistema
+echo "Assemblant web/index.html..."
+bash "$ROOT/web/assemble.sh"
+if [ $? -ne 0 ]; then
+    echo "ERROR assemblant index.html"
+    exit 1
+fi
+
 # Generar header HTML desde web/index.html
 echo "Generando web/index_html.h..."
 bash "$ROOT/web/gen_html_header.sh"
