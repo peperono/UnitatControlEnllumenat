@@ -135,7 +135,7 @@ static void push_if_pending(struct mg_mgr* mgr) {
         std::lock_guard<std::mutex> lk(se.mtx);
         inputs  = se.inputs;
         outputs = se.outputs;
-        edges   = se.last_edges;
+        edges   = std::move(se.last_edges);
         counts  = se.edge_counts;
     }
     {
