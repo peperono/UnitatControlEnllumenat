@@ -8,7 +8,6 @@
       </div>
 
       <style>
-        /* ── Control Sortides ── */
         .cs-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
         .cs-dot-on{background:#3fb950}.cs-dot-off{background:#f85149}
 
@@ -84,9 +83,6 @@
 
     </div>
     <script>
-      // Port on corre ControlSortides (canvia si cal)
-      const CS_HOST = location.hostname + ':8081';
-
       document.getElementById('sub-control-sortides').addEventListener('click', e => {
         const b = e.target.closest('.cs-btn');
         if (!b) return;
@@ -98,50 +94,11 @@
       const csOutputsEl = document.getElementById('cs-outputs');
       const csLogEl     = document.getElementById('cs-log');
       const csWsStatus  = document.getElementById('cs-ws-status');
-      let csCurrentState = {};
       let csLastRenderKey = '';
 
-      function csFetch(path, opts) {
-        return fetch('http://' + CS_HOST + path, opts);
-      }
-
-      // ── WebSocket propi de ControlSortides ──
-      function csConnect() {
-        const ws = new WebSocket('ws://' + CS_HOST + '/ws');
-        ws.onopen = () => {
-          csWsStatus.innerHTML = '<span class="cs-dot cs-dot-on"></span>Connectat';
-          loadHorari();
-        };
-        ws.onclose = () => {
-          csWsStatus.innerHTML = '<span class="cs-dot cs-dot-off"></span>Desconnectat';
-          setTimeout(csConnect, 2000);
-        };
-        ws.onmessage = (e) => {
-          try {
-            const data = JSON.parse(e.data);
-            csCurrentState = data.outputs || {};
-            if (data.time) {
-              document.getElementById('rellotge-time').textContent = data.time;
-              document.getElementById('rellotge-day').textContent  = data.day || '';
-            }
-            const key = JSON.stringify(csCurrentState);
-            if (key !== csLastRenderKey) {
-              csLastRenderKey = key;
-              csRenderOutputs();
-            }
-            if (data.log && data.log.length > 0) {
-              for (const entry of data.log) csAddLog(entry.t, entry.src, entry.sig, entry.d);
-            }
-          } catch(err) {
-            csAddLog('--:--', 'WS', 'parse error', err.message);
-          }
-        };
-      }
-      csConnect();
-
-      // ── Horari ──
+      // ── Horari (HTTP al mateix servidor) ──
       function loadHorari() {
-        csFetch('/horari').then(r => r.text()).then(txt => {
+        fetch('/horari').then(r => r.text()).then(txt => {
           try { document.getElementById('horari-json').value = JSON.stringify(JSON.parse(txt), null, 2); }
           catch { document.getElementById('horari-json').value = txt; }
         }).catch(() => {});
@@ -150,18 +107,31 @@
       function applyHorari() {
         const body = document.getElementById('horari-json').value;
         try { JSON.parse(body); } catch(e) { alert('JSON invàlid: ' + e.message); return; }
-        csFetch('/horari', { method:'POST', headers:{'Content-Type':'application/json'}, body });
+        fetch('/horari', { method:'POST', headers:{'Content-Type':'application/json'}, body });
+      }
+
+      // ── Accions de control ──
+      function csAction(id, action) {
+        fetch('/control', { method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify([{id, action}]) });
+      }
+      function csDeleteOutput(id) {
+        fetch('/control', { method:'POST', headers:{'Content-Type':'application/json'},
+                            body: JSON.stringify([{id, action:'delete'}]) });
       }
 
       // ── Render sortides ──
-      function csRenderOutputs() {
-        const ids = Object.keys(csCurrentState).map(Number).sort((a,b) => a-b);
+      function csRenderOutputs(csOutputs) {
+        const ids = Object.keys(csOutputs).map(Number).sort((a,b) => a-b);
         if (ids.length === 0) {
           csOutputsEl.innerHTML = '<p style="color:#484f58;font-size:13px">Cap sortida registrada</p>';
           return;
         }
+        const key = JSON.stringify(csOutputs);
+        if (key === csLastRenderKey) return;
+        csLastRenderKey = key;
         csOutputsEl.innerHTML = ids.map(id => {
-          const o = csCurrentState[id];
+          const o = csOutputs[id];
           const on = o.result;
           const isRemote = o.mode === 'REMOTE';
           return `
@@ -185,23 +155,32 @@
         }).join('');
       }
 
-      function csAction(id, action) {
-        csFetch('/control', { method:'POST', headers:{'Content-Type':'application/json'},
-                              body: JSON.stringify([{id, action}]) });
-      }
-      function csDeleteOutput(id) {
-        csFetch('/control', { method:'POST', headers:{'Content-Type':'application/json'},
-                              body: JSON.stringify([{id, action:'delete'}]) });
+      // ── Log ──
+      function csAddLog(entries) {
+        const colors = {ControlRemot:'#00d4ff', ControlHorari:'#3fb950', HttpServer:'#ff9800'};
+        for (const e of entries) {
+          const color = colors[e.src] || '#8b949e';
+          csLogEl.innerHTML =
+            `<div class="cs-log-entry"><span class="time">${e.t}</span> ` +
+            `<span style="color:${color};font-weight:600">[${e.src}]</span> ` +
+            `<span style="color:#8b949e">${e.sig}</span> ${e.d}</div>` +
+            csLogEl.innerHTML;
+        }
       }
 
-      // ── Log ──
-      function csAddLog(t, src, sig, detail) {
-        const colors = {ControlRemot:'#00d4ff', ControlHorari:'#3fb950', HttpServer:'#ff9800', WS:'#f85149'};
-        const color = colors[src] || '#8b949e';
-        csLogEl.innerHTML =
-          `<div class="cs-log-entry"><span class="time">${t}</span> ` +
-          `<span style="color:${color};font-weight:600">[${src}]</span> ` +
-          `<span style="color:#8b949e">${sig}</span> ${detail}</div>` +
-          csLogEl.innerHTML;
-      }
+      // ── Escolta CustomEvents del WS unificat ──
+      window.addEventListener('ws-connected', () => {
+        csWsStatus.innerHTML = '<span class="cs-dot cs-dot-on"></span>Connectat';
+        loadHorari();
+      });
+      window.addEventListener('ws-disconnected', () => {
+        csWsStatus.innerHTML = '<span class="cs-dot cs-dot-off"></span>Desconnectat';
+      });
+      window.addEventListener('ws-io-update', (e) => {
+        const d = e.detail;
+        if (d.time) document.getElementById('rellotge-time').textContent = d.time;
+        if (d.day)  document.getElementById('rellotge-day').textContent  = d.day;
+        if (d.cs_outputs) csRenderOutputs(d.cs_outputs);
+        if (d.log && d.log.length > 0) csAddLog(d.log);
+      });
     </script>

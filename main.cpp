@@ -1,3 +1,4 @@
+#include "qp_config.hpp"
 #include "qpcpp/include/qpcpp.hpp"
 #include "signals.h"
 #include "DigitalEdgeDetector/DigitalEdgeDetector.h"
@@ -7,6 +8,11 @@
 #include "RemoteIO/RemoteIOState.h"
 #include "Test/TestController.hpp"
 #include "RemoteIO/IOReader_Remot.hpp"
+#include "ControlRemot/ControlRemot.h"
+#include "ControlHorari/ControlHorari.h"
+#include "ControlHorari/ControlHorariState.h"
+#include "ControlHorari/json_horari.h"
+#include "Rellotge/Rellotge.h"
 #include "mongoose/mongoose.h"
 #include <cstdio>
 #include <cstdlib>
@@ -14,26 +20,27 @@
 SharedState   se;
 RemoteIOState remoteIO;
 
-// ── QP assertion handler (requerido por el framework) ─────────────────────────
 extern "C" Q_NORETURN Q_onError(char const * const module, int_t const id) {
     std::fprintf(stderr, "Q_onError: %s:%d\n", module, id);
     std::exit(1);
 }
 
-// ── QF pub/sub table ──────────────────────────────────────────────────────────
 static QP::QSubscrList subscrSto[MAX_SIG];
 
-// ── Event queues ──────────────────────────────────────────────────────────────
+// ── Cues d'events ─────────────────────────────────────────────────────────────
 static QP::QEvtPtr edgeDetectorQSto[10];
-static QP::QEvtPtr controlQSto[10];
+static QP::QEvtPtr monitorQSto[10];
 static QP::QEvtPtr testObserverQSto[10];
+static QP::QEvtPtr controlRemotQSto[64];
+static QP::QEvtPtr controlHorariQSto[32];
+static QP::QEvtPtr rellotgeQSto[16];
 
-// ── Callbacks requeridos por el port win32-qv ─────────────────────────────────
+// ── Callbacks del port win32-qv ───────────────────────────────────────────────
 namespace QP {
 namespace QF {
 
 void onStartup() {
-    setTickRate(10U, 50); // 10 ticks/seg, prioridad media del thread ticker
+    setTickRate(100U, 50); // 100 ticks/s per al Rellotge simulat
 }
 
 void onCleanup() {}
@@ -47,10 +54,10 @@ void onClockTick() {
 
 // ── main ──────────────────────────────────────────────────────────────────────
 int main() {
-    std::printf("=== Digital IO Edge Detector ===\n");
-    std::printf("Selecciona reader:\n");
-    std::printf("  1) Test (secuencia automatica)\n");
-    std::printf("  2) Control remoto (navegador web)\n");
+    std::printf("=== UnitatControlEnllumenat ===\n");
+    std::printf("Selecciona reader (Control Entrades):\n");
+    std::printf("  1) Test (sequencia automatica)\n");
+    std::printf("  2) Control remot (navegador web)\n");
     std::printf("> ");
     int choice = 1;
     std::scanf("%d", &choice);
@@ -60,14 +67,12 @@ int main() {
     std::scanf(" %c", &dbg);
     mg_log_set(dbg == 's' ? MG_LL_DEBUG : MG_LL_NONE);
 
-    // Configuracion de entradas
     const std::vector<InputConfig> configs = {
         InputConfig{1, /*logic_positive=*/true,  /*always=*/true,  {}   },
         InputConfig{2, /*logic_positive=*/true,  /*always=*/false, {10} },
         InputConfig{4, /*logic_positive=*/false, /*always=*/true,  {}   }
     };
 
-    // Inicialitzar remoteIO amb l'estat inicial (tot a false)
     if (choice == 2) {
         std::lock_guard<std::mutex> lk(remoteIO.mtx);
         for (const auto& cfg : configs) {
@@ -79,14 +84,16 @@ int main() {
 
     IOReader reader = (choice == 2) ? makeRemoteReader() : makeTestReader();
 
-    // ── Active object instances ───────────────────────────────────────────────
+    // ── Active Object instances ───────────────────────────────────────────────
     static DigitalEdgeDetector edgeDetector{ std::move(reader), 1U };
     static Monitor             monitor;
     static TestObserver        testObserver;
+    static ControlRemot        controlRemot;
+    static ControlHorari       controlHorari;
+    static Rellotge            rellotge;
 
     edgeDetector.configure(configs);
 
-    // Inicializar SharedState
     {
         std::lock_guard<std::mutex> lk(se.mtx);
         se.configs = configs;
@@ -100,19 +107,32 @@ int main() {
     QP::QF::init();
     QP::QActive::psInit(subscrSto, Q_DIM(subscrSto));
 
-    static std::uint8_t reconfigPool[4 * sizeof(ReconfigureEvt)];
-    QP::QF::poolInit(reconfigPool, sizeof(reconfigPool), sizeof(ReconfigureEvt));
+    // Pool 1 (petit): events de comanda (OutputCmdEvt, OutputModeEvt, etc.)
+    static QF_MPOOL_EL(OutputCmdEvt) smallPool[16];
+    QP::QF::poolInit(smallPool, sizeof(smallPool), sizeof(smallPool[0]));
 
-    // Prioridad 3 → DigitalEdgeDetector (poll IO + publica eventos + escriu SharedState)
-    // Prioridad 2 → Monitor             (imprime por consola)
-    // Prioridad 1 → TestObserver        (observa eventos para verificación, solo en modo test)
-    edgeDetector.start(3U, edgeDetectorQSto, Q_DIM(edgeDetectorQSto), nullptr, 0U);
-    monitor.start(     2U, controlQSto,      Q_DIM(controlQSto),      nullptr, 0U);
+    // Pool 2 (gran): ReconfigureEvt i OutputStateEvt
+    static QF_MPOOL_EL(ReconfigureEvt) largePool[8];
+    QP::QF::poolInit(largePool, sizeof(largePool), sizeof(largePool[0]));
+
+    // Prioritats (alt→baix): Rellotge > EdgeDetector > ControlRemot > ControlHorari > Monitor > TestObserver
+    rellotge.start(    6U, rellotgeQSto,      Q_DIM(rellotgeQSto),      nullptr, 0U);
+    edgeDetector.start(5U, edgeDetectorQSto,  Q_DIM(edgeDetectorQSto),  nullptr, 0U);
+    controlRemot.start(4U, controlRemotQSto,  Q_DIM(controlRemotQSto),  nullptr, 0U);
+    controlHorari.start(3U,controlHorariQSto, Q_DIM(controlHorariQSto), nullptr, 0U);
+    monitor.start(     2U, monitorQSto,       Q_DIM(monitorQSto),       nullptr, 0U);
     if (choice != 2) {
         testObserver.start(1U, testObserverQSto, Q_DIM(testObserverQSto), nullptr, 0U);
     }
 
-    HttpServer::start(8080, &edgeDetector);
+    // Carrega l'horari per defecte
+    {
+        std::lock_guard<std::mutex> lk(ch_state.mtx);
+        ch_state.programacioHoraria.assign(JSON_HORARI, sizeof(JSON_HORARI) - 1);
+    }
+    controlHorari.loadJson(JSON_HORARI, sizeof(JSON_HORARI) - 1);
+
+    HttpServer::start(8080, &edgeDetector, &controlRemot);
 
     int ret = QP::QF::run();
 

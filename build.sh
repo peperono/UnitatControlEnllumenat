@@ -66,6 +66,9 @@ $GPP -std=c++17 -Wall -O1 -static \
     "$ROOT/DigitalEdgeDetector/DigitalEdgeDetector.cpp" \
     "$ROOT/Monitor/Monitor.cpp" \
     "$ROOT/HttpServer/HttpServer.cpp" \
+    "$ROOT/ControlRemot/ControlRemot.cpp" \
+    "$ROOT/ControlHorari/ControlHorari.cpp" \
+    "$ROOT/Rellotge/Rellotge.cpp" \
     "$QPCPP/src/qf/qep_hsm.cpp" \
     "$QPCPP/src/qf/qep_msm.cpp" \
     "$QPCPP/src/qf/qf_act.cpp" \
