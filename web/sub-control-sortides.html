@@ -2,16 +2,10 @@
     <div id="sub-control-sortides" class="subsystem">
       <div class="subsystem-header">
         <h1>Control Sortides</h1>
-        <span id="cs-ws-status" style="font-size:12px">
-          <span class="cs-dot cs-dot-off"></span>Desconnectat
-        </span>
       </div>
 
       <style>
-        .cs-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle}
-        .cs-dot-on{background:#3fb950}.cs-dot-off{background:#f85149}
-
-        #sub-control-sortides .outputs{display:flex;flex-wrap:wrap;gap:10px}
+#sub-control-sortides .outputs{display:flex;flex-wrap:wrap;gap:10px}
         .output-card{background:#161b22;border-radius:8px;padding:10px;min-width:150px;text-align:center;border:2px solid #30363d;transition:border-color .2s,box-shadow .2s}
         .output-card.active{border-color:#00d4ff;box-shadow:0 0 10px rgba(0,212,255,.3)}
         .output-id{font-size:11px;color:#8b949e;margin-bottom:4px;font-family:'Courier New',monospace;font-weight:700}
@@ -93,7 +87,6 @@
 
       const csOutputsEl = document.getElementById('cs-outputs');
       const csLogEl     = document.getElementById('cs-log');
-      const csWsStatus  = document.getElementById('cs-ws-status');
       let csLastRenderKey = '';
 
       // ── Horari (HTTP al mateix servidor) ──
@@ -169,13 +162,7 @@
       }
 
       // ── Escolta CustomEvents del WS unificat ──
-      window.addEventListener('ws-connected', () => {
-        csWsStatus.innerHTML = '<span class="cs-dot cs-dot-on"></span>Connectat';
-        loadHorari();
-      });
-      window.addEventListener('ws-disconnected', () => {
-        csWsStatus.innerHTML = '<span class="cs-dot cs-dot-off"></span>Desconnectat';
-      });
+      window.addEventListener('ws-connected', () => loadHorari());
       window.addEventListener('ws-io-update', (e) => {
         const d = e.detail;
         if (d.time) document.getElementById('rellotge-time').textContent = d.time;
