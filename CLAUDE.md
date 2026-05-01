@@ -33,7 +33,7 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 
 | Priority | AO | Publishes | Subscribes |
 |----------|----|-----------|------------|
-| 3 | `DigitalEdgeDetector` | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` | `REMOTE_INPUT_SIG`, `RECONFIGURE_SIG` |
+| 3 | `DigitalEdgeDetector` | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` | `RECONFIGURE_SIG` |
 | 2 | `Monitor` | — | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` |
 | 1 | `TestObserver` | — | both (test mode only) |
 
@@ -41,16 +41,115 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 
 **IOReader injection:** `DigitalEdgeDetector` accepts an `IOReader = std::function<void(map<int,bool>&, map<int,bool>&)>` at construction. In test mode `makeTestReader()` (`Test/TestController.hpp`) returns a lambda cycling through `TestStep` scenarios. In remote mode `makeRemoteReader()` (`RemoteIO/IOReader_Remot.hpp`) returns a lambda that reads from `RemoteIOState remoteIO` (mutex-protected, written by the Mongoose thread via WebSocket). Future platform implementations: `HWReader` (reads GPIO hardware).
 
-**Event memory:** `IOStateEvt` and `EdgeDetectedEvt` use static (zero-pool) semantics because they hold `std::vector`/`std::unordered_map` which are incompatible with QP memory pools. This is safe under the QV cooperative scheduler. `RemoteInputEvt` and `ReconfigureEvt` use QP memory pools (initialized in `main.cpp`). Max 16 configs per `ReconfigureEvt`.
+**Event memory:** `IOStateEvt` and `EdgeDetectedEvt` use static (zero-pool) semantics because they hold `std::vector`/`std::unordered_map` which are incompatible with QP memory pools. This is safe under the QV cooperative scheduler. `ReconfigureEvt` uses a QP memory pool (initialized in `main.cpp`). Max 16 configs per `ReconfigureEvt`. Remote IO input is not a QP event: the Mongoose thread writes directly to `remoteIO` (mutex-protected), and `DigitalEdgeDetector` reads it via the injected `IOReader` lambda on each poll tick.
 
 **Race condition to be aware of:** After a `PUT /configs` HTTP response is sent, the QV poll timer may fire before `RECONFIGURE_SIG` is processed, emitting a WS push with stale IDs. The JS UI guards against this with `expectedInputIds`.
+
+## Active Objects — endpoints, WebSocket i events
+
+### `DigitalEdgeDetector` (prioritat 3)
+
+| Direcció | Endpoint / WS | Format | Efecte |
+|----------|--------------|--------|--------|
+| → AO | `PUT /configs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Publica `RECONFIGURE_SIG` |
+| → AO | `WS /ws` (client→servidor) | `{"inputs":{"1":true},"outputs":{"10":false}}` | Escriu a `remoteIO`; llegit per l'IOReader en cada poll tick |
+| AO → | `WS /ws` push (`se.push_pending`) | `"inputs":{"1":true},"outputs":{"10":false},"last_edges":[2],"edge_counts":{"2":3}` | Escriu `se.inputs`, `se.outputs`, `se.last_edges`, `se.edge_counts` |
+| AO → | `GET /configs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Lectura de `se.configs[]` |
+
+| Event | Rol |
+|-------|-----|
+| `RECONFIGURE_SIG` (`ReconfigureEvt`) | subscrit — recarrega configuració d'entrades |
+| `IO_STATE_CHANGED_SIG` (`IOStateEvt`) | publica — inputs/outputs actuals |
+| `EDGE_DETECTED_SIG` (`EdgeDetectedEvt`) | publica — IDs d'entrades amb flanc detectat |
+
+---
+
+### `ControlRemot`
+
+| Direcció | Endpoint / WS | Format | Efecte |
+|----------|--------------|--------|--------|
+| → AO | `POST /control` | `[{"id":1,"action":"activate"}]` | `handleJson` posta `CTRL_OUTPUT_CMD_SIG`, `CTRL_OUTPUT_MODE_SIG`, `CTRL_OUTPUT_RETURN_AUTO_SIG` o `CTRL_OUTPUT_DELETE_SIG` |
+| AO → | `WS /ws` push (`cr_state.push_pending`) | `"cs_outputs":{"1":{"state":false,"commanded":true,"result":true,"mode":"REMOTE"}}` | Escriu `cr_state.outputsResult` |
+
+Valors vàlids de `action`: `activate`, `deactivate`, `set_remote`, `set_auto`, `return_auto` (`id:-1` = totes les sortides), `delete`.
+
+| Event | Rol |
+|-------|-----|
+| `OUTPUT_STATE_SIG` (`OutputStateEvt`) | subscrit — rep l'estat real de sortides (des de `ControlHorari`) |
+| `CTRL_OUTPUT_CMD_SIG` (`OutputCmdEvt`) | subscrit — ordre activate/deactivate |
+| `CTRL_OUTPUT_MODE_SIG` (`OutputModeEvt`) | subscrit — canvi mode AUTO/REMOTE |
+| `CTRL_OUTPUT_RETURN_AUTO_SIG` (`OutputReturnAutoEvt`) | subscrit — torna a AUTO (una o totes) |
+| `CTRL_OUTPUT_DELETE_SIG` (`OutputDeleteEvt`) | subscrit — elimina una sortida |
+| `OUTPUT_RESULT_SIG` (`OutputResultEvt`) | publica — resultat consolidat de totes les sortides |
+
+---
+
+### `ControlHorari`
+
+| Direcció | Endpoint / WS | Format | Efecte |
+|----------|--------------|--------|--------|
+| → AO | `POST /horari` | `{"dilluns":[{"id":1,"act":"on","time":"08:00"}],...}` | Escriu `ch_state.programacioHoraria` + `load_pending=true`; l'AO recarrega al pròxim `RELLOTGE_TICK_SIG` |
+| AO → | `GET /horari` | `{"dilluns":[{"id":1,"act":"on","time":"08:00"}],...}` | Lectura de `ch_state.programacioHoraria` (no involucra l'AO directament) |
+
+| Event | Rol |
+|-------|-----|
+| `RELLOTGE_TICK_SIG` (`RellotgeTickEvt`) | subscrit — cada minut: comprova `load_pending` i executa maniobres |
+| `OUTPUT_STATE_SIG` (`OutputStateEvt`) | publica — quan hi ha maniobres que coincideixen amb l'hora actual |
+
+---
+
+### `Rellotge`
+
+| Direcció | Endpoint / WS | Format | Efecte |
+|----------|--------------|--------|--------|
+| AO → | `WS /ws` push (`rellotge_state.push_pending`) | `"time":"14:32","day":"dimarts"` | Escriu `rellotge_state.hour`, `.minute`, `.wday` |
+
+Cap endpoint HTTP envia dades al Rellotge.
+
+| Event | Rol |
+|-------|-----|
+| `RELLOTGE_TICK_INTERNAL_SIG` | intern (time event armat en `initial`) — cada 50 ms (= 1 minut simulat) |
+| `RELLOTGE_TICK_SIG` (`RellotgeTickEvt`) | publica — hora/minut/dia actuals |
+
+---
+
+### `Monitor` (prioritat 2)
+
+Cap endpoint ni WS interactua directament amb aquest AO. Només consumeix events QP.
+
+| Event | Rol |
+|-------|-----|
+| `IO_STATE_CHANGED_SIG` (`IOStateEvt`) | subscrit |
+| `EDGE_DETECTED_SIG` (`EdgeDetectedEvt`) | subscrit |
+
+---
 
 ## HTTP endpoints
 
 - `GET /` — serves embedded HTML/JS page
 - `GET /configs` — returns `se.configs[]` as JSON array
-- `PUT /configs` — replaces full config array, posts `RECONFIGURE_SIG`
-- `WebSocket /ws` — pushes `se.inputs/outputs/last_edges/edge_counts`, receives `inputs/outputs`
+  ```json
+  [{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]
+  ```
+- `PUT /configs` — replaces full config array, posts `RECONFIGURE_SIG`. Body: same format as GET response. Max 16 entries (`MAX_CONFIGS`), max 8 linked outputs (`MAX_LINKED`).
+- `POST /control` — posts command events to `ControlRemot` via `handleJson`. Body: array of actions:
+  ```json
+  [{"id":1,"action":"activate"}]
+  ```
+  Valid actions: `activate`, `deactivate`, `set_remote`, `set_auto`, `return_auto` (`id:-1` targets all outputs), `delete`.
+- `GET /horari` — returns `ch_state.programacioHoraria` as JSON
+  ```json
+  {"dilluns":[{"id":1,"act":"on","time":"08:00"},{"id":1,"act":"off","time":"22:00"}],"dimarts":[...],...}
+  ```
+- `POST /horari` — replaces schedule, sets `ch_state.load_pending`. Body: same format as GET response. `ControlHorari` reloads it on the next `RELLOTGE_TICK_SIG`.
+- `WebSocket /ws` — server pushes on any `push_pending` flag (se / cr_state / rellotge_state / log_state):
+  ```json
+  {"inputs":{"1":true},"outputs":{"10":false},"last_edges":[2],"edge_counts":{"2":3},
+   "time":"14:32","day":"dimarts",
+   "cs_outputs":{"1":{"state":false,"commanded":true,"result":true,"mode":"REMOTE"}},
+   "log":[{"t":"14:32:01","src":"ControlRemot","sig":"OUTPUT_RESULT_SIG","d":"1=ON(REM)"}]}
+  ```
+  Client sends to simulate IO: `{"inputs":{"1":true},"outputs":{"10":false}}` — written directly to `remoteIO`.
 
 ## Key files
 
