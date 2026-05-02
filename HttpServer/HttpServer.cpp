@@ -71,7 +71,6 @@ static std::string json_str(const std::string& v) {
 
 static std::string build_ws_msg(
         const std::unordered_map<int, bool>& inputs,
-        const std::unordered_map<int, bool>& outputs,
         const std::vector<int>&              edges,
         const std::unordered_map<int, int>&  counts,
         const std::unordered_map<int, OutputInfo>& cs_outputs,
@@ -85,7 +84,6 @@ static std::string build_ws_msg(
 
     std::string s;
     s += "{\"inputs\":"      + bool_map_to_json(inputs);
-    s += ",\"outputs\":"     + bool_map_to_json(outputs);
     s += ",\"last_edges\":"  + int_vec_to_json(edges);
     s += ",\"edge_counts\":" + int_map_to_json(counts);
     s += ",\"time\":\""      + std::string(tbuf) + "\"";
@@ -124,7 +122,7 @@ static void push_if_pending(struct mg_mgr* mgr) {
                  | log_state.push_pending.exchange(false);
     if (!pending) return;
 
-    std::unordered_map<int, bool>       inputs, outputs;
+    std::unordered_map<int, bool>       inputs;
     std::unordered_map<int, int>        counts;
     std::vector<int>                    edges;
     std::unordered_map<int, OutputInfo> cs_outputs;
@@ -134,7 +132,6 @@ static void push_if_pending(struct mg_mgr* mgr) {
     {
         std::lock_guard<std::mutex> lk(se.mtx);
         inputs  = se.inputs;
-        outputs = se.outputs;
         edges   = std::move(se.last_edges);
         counts  = se.edge_counts;
     }
@@ -153,7 +150,7 @@ static void push_if_pending(struct mg_mgr* mgr) {
         logs = std::move(log_state.pending);
     }
 
-    std::string msg = build_ws_msg(inputs, outputs, edges, counts,
+    std::string msg = build_ws_msg(inputs, edges, counts,
                                    cs_outputs, hh, mm, wd, logs);
     for (struct mg_connection* c = mgr->conns; c != nullptr; c = c->next) {
         if (c->is_websocket)
@@ -202,13 +199,13 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
         // ── WS upgrade ────────────────────────────────────────────────────────
         if (mg_match(hm->uri, mg_str("/ws"), NULL)) {
             mg_ws_upgrade(c, hm, NULL);
-            std::unordered_map<int, bool>       inputs, outputs;
+            std::unordered_map<int, bool>       inputs;
             std::unordered_map<int, int>        counts;
             std::unordered_map<int, OutputInfo> cs_outputs;
             int hh, mm, wd;
             {
                 std::lock_guard<std::mutex> lk(se.mtx);
-                inputs  = se.inputs;  outputs = se.outputs;  counts = se.edge_counts;
+                inputs = se.inputs;  counts = se.edge_counts;
             }
             {
                 std::lock_guard<std::mutex> lk(cr_state.mtx);
@@ -218,7 +215,7 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
                 std::lock_guard<std::mutex> lk(rellotge_state.mtx);
                 hh = rellotge_state.hour;  mm = rellotge_state.minute;  wd = rellotge_state.wday;
             }
-            std::string msg = build_ws_msg(inputs, outputs, {}, counts, cs_outputs, hh, mm, wd, {});
+            std::string msg = build_ws_msg(inputs, {}, counts, cs_outputs, hh, mm, wd, {});
             mg_ws_send(c, msg.c_str(), msg.size(), WEBSOCKET_OP_TEXT);
 
         // ── GET /config_inputs ────────────────────────────────────────────────
@@ -320,16 +317,13 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
         auto* wm = static_cast<struct mg_ws_message*>(ev_data);
         if ((wm->flags & 0xF) != WEBSOCKET_OP_TEXT) return;
 
-        std::unordered_map<int, bool> inputs, outputs;
-        int ilen = 0, olen = 0;
-        int ioff = mg_json_get(wm->data, "$.inputs",  &ilen);
-        int ooff = mg_json_get(wm->data, "$.outputs", &olen);
+        std::unordered_map<int, bool> inputs;
+        int ilen = 0;
+        int ioff = mg_json_get(wm->data, "$.inputs", &ilen);
         if (ioff > 0) parse_bool_object({wm->data.buf + ioff, (size_t)ilen}, inputs);
-        if (ooff > 0) parse_bool_object({wm->data.buf + ooff, (size_t)olen}, outputs);
-        if (!inputs.empty() || !outputs.empty()) {
+        if (!inputs.empty()) {
             std::lock_guard<std::mutex> lk(remoteIO.mtx);
-            for (auto const& [id, v] : inputs)  remoteIO.inputs[id]  = v;
-            for (auto const& [id, v] : outputs) remoteIO.outputs[id] = v;
+            for (auto const& [id, v] : inputs) remoteIO.inputs[id] = v;
         }
     }
 }

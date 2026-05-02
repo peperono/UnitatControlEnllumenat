@@ -25,6 +25,7 @@ void DigitalEdgeDetector::configure(const std::vector<InputConfig>& configs) {
 
 Q_STATE_DEF(DigitalEdgeDetector, initial) {
     Q_UNUSED_PAR(e);
+    subscribe(OUTPUT_RESULT_SIG);
     m_pollTimer.armX(m_pollTicks, m_pollTicks);
     return tran(&DigitalEdgeDetector::operating);
 }
@@ -99,6 +100,13 @@ Q_STATE_DEF(DigitalEdgeDetector, operating) {
             break;
         }
 
+        case OUTPUT_RESULT_SIG: {
+            auto const* ev = Q_EVT_CAST(OutputResultEvt);
+            m_commandedOutputs = ev->outputs;
+            status = Q_HANDLED();
+            break;
+        }
+
         case RECONFIGURE_SIG: {
             auto const* evt = Q_EVT_CAST(ReconfigureEvt);
             std::vector<InputConfig> newConfigs;
@@ -150,8 +158,14 @@ bool DigitalEdgeDetector::detection_enabled(
     if (cfg.detection_always) return true;
 
     for (int out_id : cfg.linked_outputs) {
-        auto it = outputs.find(out_id);
-        if (it != outputs.end() && it->second) return true;
+        // Estat comandat per ControlRemot té prioritat sobre l'IOReader
+        auto it = m_commandedOutputs.find(out_id);
+        if (it != m_commandedOutputs.end()) {
+            if (it->second) return true;
+            continue;
+        }
+        auto it2 = outputs.find(out_id);
+        if (it2 != outputs.end() && it2->second) return true;
     }
     return false;
 }

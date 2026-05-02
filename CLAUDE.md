@@ -34,7 +34,7 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 | Priority | AO | Publishes | Subscribes |
 |----------|----|-----------|------------|
 | 6 | `Rellotge` | `RELLOTGE_TICK_SIG` | — |
-| 5 | `DigitalEdgeDetector` | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` | `RECONFIGURE_SIG` |
+| 5 | `DigitalEdgeDetector` | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` | `RECONFIGURE_SIG`, `OUTPUT_RESULT_SIG` |
 | 4 | `ControlRemot` | `OUTPUT_RESULT_SIG` | `OUTPUT_STATE_SIG`, `CTRL_OUTPUT_CMD_SIG`, `CTRL_OUTPUT_MODE_SIG`, `CTRL_OUTPUT_RETURN_AUTO_SIG`, `CTRL_OUTPUT_DELETE_SIG` |
 | 3 | `ControlHorari` | `OUTPUT_STATE_SIG` | `RELLOTGE_TICK_SIG` |
 | 2 | `Monitor` | — | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` |
@@ -55,13 +55,14 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 | Direcció | Endpoint / WS | Format | Efecte |
 |----------|--------------|--------|--------|
 | → AO | `PUT /config_inputs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Publica `RECONFIGURE_SIG` |
-| → AO | `WS /ws` (client→servidor) | `{"inputs":{"1":true},"outputs":{"10":false}}` | Escriu a `remoteIO`; llegit per l'IOReader en cada poll tick |
-| AO → | `WS /ws` push (`se.push_pending`) | `"inputs":{"1":true},"outputs":{"10":false},"last_edges":[2],"edge_counts":{"2":3}` | Escriu `se.inputs`, `se.outputs`, `se.last_edges`, `se.edge_counts` |
+| → AO | `WS /ws` (client→servidor) | `{"inputs":{"1":true}}` | Escriu a `remoteIO.inputs`; llegit per l'IOReader en cada poll tick |
+| AO → | `WS /ws` push (`se.push_pending`) | `"inputs":{"1":true},"last_edges":[2],"edge_counts":{"2":3}` | Escriu `se.inputs`, `se.last_edges`, `se.edge_counts` |
 | AO → | `GET /config_inputs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Lectura de `se.configs[]` |
 
 | Event | Rol |
 |-------|-----|
 | `RECONFIGURE_SIG` (`ReconfigureEvt`) | subscrit — recarrega configuració d'entrades |
+| `OUTPUT_RESULT_SIG` (`OutputResultEvt`) | subscrit — actualitza `m_commandedOutputs`; estat efectiu de sortides per a `detection_enabled()` |
 | `IO_STATE_CHANGED_SIG` (`IOStateEvt`) | publica — inputs/outputs actuals |
 | `EDGE_DETECTED_SIG` (`EdgeDetectedEvt`) | publica — IDs d'entrades amb flanc detectat |
 
@@ -147,12 +148,12 @@ Cap endpoint ni WS interactua directament amb aquest AO. Només consumeix events
 - `POST /programacio_horaria` — replaces schedule, sets `ch_state.load_pending`. Body: same format as GET response. `ControlHorari` reloads it on the next `RELLOTGE_TICK_SIG`.
 - `WebSocket /ws` — server pushes on any `push_pending` flag (se / cr_state / rellotge_state / log_state):
   ```json
-  {"inputs":{"1":true},"outputs":{"10":false},"last_edges":[2],"edge_counts":{"2":3},
+  {"inputs":{"1":true},"last_edges":[2],"edge_counts":{"2":3},
    "time":"14:32","day":"dimarts",
    "cs_outputs":{"1":{"state":false,"commanded":true,"result":true,"mode":"REMOTE"}},
    "log":[{"t":"14:32:01","src":"ControlRemot","sig":"OUTPUT_RESULT_SIG","d":"1=ON(REM)"}]}
   ```
-  Client sends to simulate IO: `{"inputs":{"1":true},"outputs":{"10":false}}` — written directly to `remoteIO`.
+  Client sends to simulate inputs: `{"inputs":{"1":true}}` — written directly to `remoteIO.inputs`. Outputs are not sent via WS; `DigitalEdgeDetector` uses `m_commandedOutputs` (from `OUTPUT_RESULT_SIG`) per a `detection_enabled()`.
 
 ## Key files
 

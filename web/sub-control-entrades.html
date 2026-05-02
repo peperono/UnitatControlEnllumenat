@@ -7,10 +7,7 @@
         <div class="io-section">
           <div class="io-grid" id="grid-inputs"></div>
         </div>
-        <div class="io-section">
-          <div class="io-grid" id="grid-outputs"></div>
-        </div>
-        <div class="io-section">
+<div class="io-section">
           <div class="section-title">Flancs detectats</div>
           <ul id="edges-log"></ul>
         </div>
@@ -20,7 +17,6 @@
         <div id="ctrl-section">
           <div class="section-title">Control remot</div>
           <div class="ctrl-group"><div id="ctrl-inputs"></div></div>
-          <div class="ctrl-group"><div id="ctrl-outputs"></div></div>
         </div>
         <div>
           <div class="section-title">Configuraci&oacute; d'entrades</div>
@@ -48,14 +44,12 @@
 
       let controlsReady = false;
       let expectedInputIds = null;
-      const controlState = { inputs: {}, outputs: {} };
+      const controlState = { inputs: {} };
 
       const gridInputs  = document.getElementById('grid-inputs');
-      const gridOutputs = document.getElementById('grid-outputs');
       const edgesLog    = document.getElementById('edges-log');
       const ctrlSection = document.getElementById('ctrl-section');
       const ctrlInputs  = document.getElementById('ctrl-inputs');
-      const ctrlOutputs = document.getElementById('ctrl-outputs');
       const cfgEditor   = document.getElementById('cfg-editor');
       const cfgStatus   = document.getElementById('cfg-status');
       const btnCargar   = document.getElementById('btn-cargar');
@@ -98,7 +92,7 @@
         edgesLog.insertBefore(li, edgesLog.firstChild);
       }
 
-      function sendControl() { wsSend(controlState); }
+      function sendControl() { wsSend({ inputs: controlState.inputs }); }
 
       function makeToggle(container, prefix, id, stateMap) {
         const btn = document.createElement('button');
@@ -118,15 +112,11 @@
         container.appendChild(btn);
       }
 
-      function initControls(inputs, outputs) {
-        ctrlInputs.innerHTML  = '';
-        ctrlOutputs.innerHTML = '';
+      function initControls(inputs) {
+        ctrlInputs.innerHTML = '';
         controlState.inputs  = {};
-        controlState.outputs = {};
-        Object.keys(inputs).sort((a,b)  => Number(a)-Number(b))
-          .forEach(id => makeToggle(ctrlInputs,  'E', Number(id), controlState.inputs));
-        Object.keys(outputs).sort((a,b) => Number(a)-Number(b))
-          .forEach(id => makeToggle(ctrlOutputs, 'S', Number(id), controlState.outputs));
+        Object.keys(inputs).sort((a,b) => Number(a)-Number(b))
+          .forEach(id => makeToggle(ctrlInputs, 'E', Number(id), controlState.inputs));
         ctrlSection.style.display = 'block';
         sendControl();
       }
@@ -191,19 +181,13 @@
           const curIds = Object.keys(controlState.inputs).sort().join(',');
           const wsMatchesExpected = (expectedInputIds === null || newIds === expectedInputIds);
           if (!controlsReady || (newIds !== curIds && wsMatchesExpected)) {
-            initControls(d.inputs, d.outputs || {});
+            initControls(d.inputs);
             controlsReady = true;
             if (expectedInputIds !== null && newIds === expectedInputIds)
               expectedInputIds = null;
           }
         }
         if (d.inputs) renderIOCards(gridInputs, d.inputs, d.edge_counts || {});
-        if (d.outputs || d.cs_outputs) {
-          const effectiveOutputs = Object.assign({}, d.outputs || {});
-          if (d.cs_outputs)
-            Object.entries(d.cs_outputs).forEach(([id, o]) => { effectiveOutputs[id] = o.result; });
-          renderIOCards(gridOutputs, effectiveOutputs);
-        }
         if (d.last_edges && d.last_edges.length > 0) addEdgeEntry(d.last_edges);
       });
     </script>
