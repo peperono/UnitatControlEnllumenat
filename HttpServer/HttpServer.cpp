@@ -221,8 +221,8 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
             std::string msg = build_ws_msg(inputs, outputs, {}, counts, cs_outputs, hh, mm, wd, {});
             mg_ws_send(c, msg.c_str(), msg.size(), WEBSOCKET_OP_TEXT);
 
-        // ── GET /configs ──────────────────────────────────────────────────────
-        } else if (mg_match(hm->uri, mg_str("/configs"), NULL)
+        // ── GET /config_inputs ────────────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/config_inputs"), NULL)
                    && mg_match(hm->method, mg_str("GET"), NULL)) {
             std::string body;
             {
@@ -240,8 +240,8 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
             }
             mg_http_reply(c, 200, "Content-Type: application/json\r\n", "%s", body.c_str());
 
-        // ── PUT /configs ──────────────────────────────────────────────────────
-        } else if (mg_match(hm->uri, mg_str("/configs"), NULL)
+        // ── PUT /config_inputs ────────────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/config_inputs"), NULL)
                    && mg_match(hm->method, mg_str("PUT"), NULL)) {
             std::vector<InputConfig> allConfigs;
             for (int i = 0; i < ReconfigureEvt::MAX_CONFIGS; ++i) {
@@ -276,15 +276,15 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
             post_reconfigure(allConfigs);
             mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{}");
 
-        // ── POST /control ─────────────────────────────────────────────────────
-        } else if (mg_match(hm->uri, mg_str("/control"), NULL)
+        // ── POST /control_outputs ─────────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/control_outputs"), NULL)
                    && mg_match(hm->method, mg_str("POST"), NULL)) {
             if (s_controlRemot && hm->body.len > 0)
                 s_controlRemot->handleJson(hm->body.buf, hm->body.len);
             mg_http_reply(c, 200, "Content-Type: application/json\r\n", "{}");
 
-        // ── GET /horari ───────────────────────────────────────────────────────
-        } else if (mg_match(hm->uri, mg_str("/horari"), NULL)
+        // ── GET /programacio_horaria ──────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/programacio_horaria"), NULL)
                    && mg_match(hm->method, mg_str("GET"), NULL)) {
             std::string body;
             {
@@ -294,8 +294,8 @@ static void http_fn(struct mg_connection* c, int ev, void* ev_data) {
             mg_http_reply(c, 200, "Content-Type: application/json\r\n",
                           "%.*s", (int)body.size(), body.c_str());
 
-        // ── POST /horari ──────────────────────────────────────────────────────
-        } else if (mg_match(hm->uri, mg_str("/horari"), NULL)
+        // ── POST /programacio_horaria ─────────────────────────────────────────
+        } else if (mg_match(hm->uri, mg_str("/programacio_horaria"), NULL)
                    && mg_match(hm->method, mg_str("POST"), NULL)) {
             if (hm->body.len > 0) {
                 {

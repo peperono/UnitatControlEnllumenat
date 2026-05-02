@@ -91,7 +91,7 @@
 
       // ── Horari (HTTP al mateix servidor) ──
       function loadHorari() {
-        fetch('/horari').then(r => r.text()).then(txt => {
+        fetch('/programacio_horaria').then(r => r.text()).then(txt => {
           try { document.getElementById('horari-json').value = JSON.stringify(JSON.parse(txt), null, 2); }
           catch { document.getElementById('horari-json').value = txt; }
         }).catch(() => {});
@@ -100,16 +100,16 @@
       function applyHorari() {
         const body = document.getElementById('horari-json').value;
         try { JSON.parse(body); } catch(e) { alert('JSON invàlid: ' + e.message); return; }
-        fetch('/horari', { method:'POST', headers:{'Content-Type':'application/json'}, body });
+        fetch('/programacio_horaria', { method:'POST', headers:{'Content-Type':'application/json'}, body });
       }
 
       // ── Accions de control ──
       function csAction(id, action) {
-        fetch('/control', { method:'POST', headers:{'Content-Type':'application/json'},
+        fetch('/control_outputs', { method:'POST', headers:{'Content-Type':'application/json'},
                             body: JSON.stringify([{id, action}]) });
       }
       function csDeleteOutput(id) {
-        fetch('/control', { method:'POST', headers:{'Content-Type':'application/json'},
+        fetch('/control_outputs', { method:'POST', headers:{'Content-Type':'application/json'},
                             body: JSON.stringify([{id, action:'delete'}]) });
       }
 

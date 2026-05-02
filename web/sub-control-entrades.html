@@ -149,7 +149,7 @@
 
       function loadConfig() {
         setBusy(btnCargar, 'Carregant...');
-        fetchWithTimeout('/configs', {}, 5000)
+        fetchWithTimeout('/config_inputs', {}, 5000)
           .then(r => r.json())
           .then(d => { cfgEditor.value = JSON.stringify(d, null, 2); cfgStatus.textContent = 'Carregat'; cfgStatus.className = 'ok'; })
           .catch(() => { cfgStatus.textContent = 'Error en carregar'; cfgStatus.className = 'err'; })
@@ -165,7 +165,7 @@
           cfgStatus.textContent = 'Màxim 16 entrades'; cfgStatus.className = 'err'; return;
         }
         setBusy(btnAplicar, 'Aplicant...');
-        fetchWithTimeout('/configs', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        fetchWithTimeout('/config_inputs', { method: 'PUT', headers: { 'Content-Type': 'application/json' },
                                       body: JSON.stringify(parsed) }, 5000)
           .then(r => {
             cfgStatus.textContent = r.ok ? 'Aplicat' : 'Error ' + r.status;
@@ -197,8 +197,13 @@
               expectedInputIds = null;
           }
         }
-        if (d.inputs)  renderIOCards(gridInputs,  d.inputs, d.edge_counts || {});
-        if (d.outputs) renderIOCards(gridOutputs, d.outputs);
+        if (d.inputs) renderIOCards(gridInputs, d.inputs, d.edge_counts || {});
+        if (d.outputs || d.cs_outputs) {
+          const effectiveOutputs = Object.assign({}, d.outputs || {});
+          if (d.cs_outputs)
+            Object.entries(d.cs_outputs).forEach(([id, o]) => { effectiveOutputs[id] = o.result; });
+          renderIOCards(gridOutputs, effectiveOutputs);
+        }
         if (d.last_edges && d.last_edges.length > 0) addEdgeEntry(d.last_edges);
       });
     </script>

@@ -33,9 +33,12 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 
 | Priority | AO | Publishes | Subscribes |
 |----------|----|-----------|------------|
-| 3 | `DigitalEdgeDetector` | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` | `RECONFIGURE_SIG` |
+| 6 | `Rellotge` | `RELLOTGE_TICK_SIG` | — |
+| 5 | `DigitalEdgeDetector` | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` | `RECONFIGURE_SIG` |
+| 4 | `ControlRemot` | `OUTPUT_RESULT_SIG` | `OUTPUT_STATE_SIG`, `CTRL_OUTPUT_CMD_SIG`, `CTRL_OUTPUT_MODE_SIG`, `CTRL_OUTPUT_RETURN_AUTO_SIG`, `CTRL_OUTPUT_DELETE_SIG` |
+| 3 | `ControlHorari` | `OUTPUT_STATE_SIG` | `RELLOTGE_TICK_SIG` |
 | 2 | `Monitor` | — | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` |
-| 1 | `TestObserver` | — | both (test mode only) |
+| 1 | `TestObserver` | — | `IO_STATE_CHANGED_SIG`, `EDGE_DETECTED_SIG` (test mode only) |
 
 **Cross-thread data:** `SharedState se` (defined in `main.cpp`, declared `extern` in `DigitalEdgeDetector/SharedState.h`) is the only shared data between the QV thread and the Mongoose thread. All access is guarded by `se.mtx`. `DigitalEdgeDetector` writes `se.inputs`, `se.outputs`, `se.last_edges`, `se.edge_counts` and sets `se.push_pending = true` directly in the poll handler. The Mongoose thread reads `se` and pushes WebSocket messages when `push_pending` is set.
 
@@ -43,7 +46,7 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 
 **Event memory:** `IOStateEvt` and `EdgeDetectedEvt` use static (zero-pool) semantics because they hold `std::vector`/`std::unordered_map` which are incompatible with QP memory pools. This is safe under the QV cooperative scheduler. `ReconfigureEvt` uses a QP memory pool (initialized in `main.cpp`). Max 16 configs per `ReconfigureEvt`. Remote IO input is not a QP event: the Mongoose thread writes directly to `remoteIO` (mutex-protected), and `DigitalEdgeDetector` reads it via the injected `IOReader` lambda on each poll tick.
 
-**Race condition to be aware of:** After a `PUT /configs` HTTP response is sent, the QV poll timer may fire before `RECONFIGURE_SIG` is processed, emitting a WS push with stale IDs. The JS UI guards against this with `expectedInputIds`.
+**Race condition to be aware of:** After a `PUT /config_inputs` HTTP response is sent, the QV poll timer may fire before `RECONFIGURE_SIG` is processed, emitting a WS push with stale IDs. The JS UI guards against this with `expectedInputIds`.
 
 ## Active Objects — endpoints, WebSocket i events
 
@@ -51,10 +54,10 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 
 | Direcció | Endpoint / WS | Format | Efecte |
 |----------|--------------|--------|--------|
-| → AO | `PUT /configs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Publica `RECONFIGURE_SIG` |
+| → AO | `PUT /config_inputs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Publica `RECONFIGURE_SIG` |
 | → AO | `WS /ws` (client→servidor) | `{"inputs":{"1":true},"outputs":{"10":false}}` | Escriu a `remoteIO`; llegit per l'IOReader en cada poll tick |
 | AO → | `WS /ws` push (`se.push_pending`) | `"inputs":{"1":true},"outputs":{"10":false},"last_edges":[2],"edge_counts":{"2":3}` | Escriu `se.inputs`, `se.outputs`, `se.last_edges`, `se.edge_counts` |
-| AO → | `GET /configs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Lectura de `se.configs[]` |
+| AO → | `GET /config_inputs` | `[{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]` | Lectura de `se.configs[]` |
 
 | Event | Rol |
 |-------|-----|
@@ -68,7 +71,7 @@ Output: `build/app.exe`. The script compiles `mongoose/mongoose.c` with `gcc` th
 
 | Direcció | Endpoint / WS | Format | Efecte |
 |----------|--------------|--------|--------|
-| → AO | `POST /control` | `[{"id":1,"action":"activate"}]` | `handleJson` posta `CTRL_OUTPUT_CMD_SIG`, `CTRL_OUTPUT_MODE_SIG`, `CTRL_OUTPUT_RETURN_AUTO_SIG` o `CTRL_OUTPUT_DELETE_SIG` |
+| → AO | `POST /control_outputs` | `[{"id":1,"action":"activate"}]` | `handleJson` posta `CTRL_OUTPUT_CMD_SIG`, `CTRL_OUTPUT_MODE_SIG`, `CTRL_OUTPUT_RETURN_AUTO_SIG` o `CTRL_OUTPUT_DELETE_SIG` |
 | AO → | `WS /ws` push (`cr_state.push_pending`) | `"cs_outputs":{"1":{"state":false,"commanded":true,"result":true,"mode":"REMOTE"}}` | Escriu `cr_state.outputsResult` |
 
 Valors vàlids de `action`: `activate`, `deactivate`, `set_remote`, `set_auto`, `return_auto` (`id:-1` = totes les sortides), `delete`.
@@ -88,8 +91,8 @@ Valors vàlids de `action`: `activate`, `deactivate`, `set_remote`, `set_auto`, 
 
 | Direcció | Endpoint / WS | Format | Efecte |
 |----------|--------------|--------|--------|
-| → AO | `POST /horari` | `{"dilluns":[{"id":1,"act":"on","time":"08:00"}],...}` | Escriu `ch_state.programacioHoraria` + `load_pending=true`; l'AO recarrega al pròxim `RELLOTGE_TICK_SIG` |
-| AO → | `GET /horari` | `{"dilluns":[{"id":1,"act":"on","time":"08:00"}],...}` | Lectura de `ch_state.programacioHoraria` (no involucra l'AO directament) |
+| → AO | `POST /programacio_horaria` | `{"dilluns":[{"id":1,"act":"on","time":"08:00"}],...}` | Escriu `ch_state.programacioHoraria` + `load_pending=true`; l'AO recarrega al pròxim `RELLOTGE_TICK_SIG` |
+| AO → | `GET /programacio_horaria` | `{"dilluns":[{"id":1,"act":"on","time":"08:00"}],...}` | Lectura de `ch_state.programacioHoraria` (no involucra l'AO directament) |
 
 | Event | Rol |
 |-------|-----|
@@ -127,21 +130,21 @@ Cap endpoint ni WS interactua directament amb aquest AO. Només consumeix events
 ## HTTP endpoints
 
 - `GET /` — serves embedded HTML/JS page
-- `GET /configs` — returns `se.configs[]` as JSON array
+- `GET /config_inputs` — returns `se.configs[]` as JSON array
   ```json
   [{"id":2,"logic_positive":true,"detection_always":false,"linked_outputs":[10]}]
   ```
-- `PUT /configs` — replaces full config array, posts `RECONFIGURE_SIG`. Body: same format as GET response. Max 16 entries (`MAX_CONFIGS`), max 8 linked outputs (`MAX_LINKED`).
-- `POST /control` — posts command events to `ControlRemot` via `handleJson`. Body: array of actions:
+- `PUT /config_inputs` — replaces full config array, posts `RECONFIGURE_SIG`. Body: same format as GET response. Max 16 entries (`MAX_CONFIGS`), max 8 linked outputs (`MAX_LINKED`).
+- `POST /control_outputs` — posts command events to `ControlRemot` via `handleJson`. Body: array of actions:
   ```json
   [{"id":1,"action":"activate"}]
   ```
   Valid actions: `activate`, `deactivate`, `set_remote`, `set_auto`, `return_auto` (`id:-1` targets all outputs), `delete`.
-- `GET /horari` — returns `ch_state.programacioHoraria` as JSON
+- `GET /programacio_horaria` — returns `ch_state.programacioHoraria` as JSON
   ```json
   {"dilluns":[{"id":1,"act":"on","time":"08:00"},{"id":1,"act":"off","time":"22:00"}],"dimarts":[...],...}
   ```
-- `POST /horari` — replaces schedule, sets `ch_state.load_pending`. Body: same format as GET response. `ControlHorari` reloads it on the next `RELLOTGE_TICK_SIG`.
+- `POST /programacio_horaria` — replaces schedule, sets `ch_state.load_pending`. Body: same format as GET response. `ControlHorari` reloads it on the next `RELLOTGE_TICK_SIG`.
 - `WebSocket /ws` — server pushes on any `push_pending` flag (se / cr_state / rellotge_state / log_state):
   ```json
   {"inputs":{"1":true},"outputs":{"10":false},"last_edges":[2],"edge_counts":{"2":3},
